@@ -39,8 +39,7 @@ import scala.language.reflectiveCalls
   * @param base
   * @param mat
   */
-class SyncTemplateRepository(val store: ZooKeeperPersistenceStore, val base: String)
-                            (implicit val mat: Materializer)
+class SyncTemplateRepository(val store: ZooKeeperPersistenceStore, val base: String)(implicit val mat: Materializer)
   extends StrictLogging with TemplateRepositoryLike {
 
   require(Paths.get(base).isAbsolute, "Template repository root path should be absolute")
