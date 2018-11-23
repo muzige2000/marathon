@@ -470,7 +470,8 @@ trait AppValidation {
   private def complyWithGpuRules(enabledFeatures: Set[String]): Validator[App] =
     conditional[App](_.gpus > 0) {
       isTrue[App]("GPU resources only work with the Mesos containerizer") { app =>
-        !app.container.exists(_.`type` == EngineType.Docker)
+        //        !app.container.exists(_.`type` == EngineType.Docker)
+        true
       } and featureEnabled(enabledFeatures, Features.GPU_RESOURCES)
     }
 

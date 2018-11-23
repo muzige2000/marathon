@@ -10,7 +10,7 @@ import org.apache.mesos.Protos.Resource.{DiskInfo, ReservationInfo}
 import scala.collection.immutable.Seq
 
 /** The result of an attempted scalar resource match. */
-sealed trait ScalarMatchResult {
+trait ScalarMatchResult {
   /** The name of the matched resource. */
   def resourceName: String
   /** The total scalar value to match. */

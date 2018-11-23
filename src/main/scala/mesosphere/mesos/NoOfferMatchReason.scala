@@ -9,6 +9,7 @@ object NoOfferMatchReason {
   case object InsufficientCpus extends NoOfferMatchReason
   case object InsufficientDisk extends NoOfferMatchReason
   case object InsufficientGpus extends NoOfferMatchReason
+  case object InsufficientGpuSet extends NoOfferMatchReason
   case object InsufficientPorts extends NoOfferMatchReason
   case object UnfulfilledRole extends NoOfferMatchReason
   case object UnfulfilledConstraint extends NoOfferMatchReason

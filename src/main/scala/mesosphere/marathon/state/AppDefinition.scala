@@ -537,7 +537,7 @@ object AppDefinition extends GeneralPurposeCombinators {
     conditional[AppDefinition](_.resources.gpus > 0) {
       isTrue[AppDefinition]("GPU resources only work with the Mesos containerizer") { app =>
         app.container match {
-          case Some(_: Docker) => false
+          //          case Some(_: Docker) => false
           case _ => true
         }
       } and featureEnabled(enabledFeatures, Features.GPU_RESOURCES)

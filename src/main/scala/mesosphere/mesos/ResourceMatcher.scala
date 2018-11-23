@@ -26,14 +26,14 @@ object ResourceMatcher extends StrictLogging {
   /**
     * A successful match result of the [[ResourceMatcher]].matchResources method.
     */
-  case class ResourceMatch(scalarMatches: Seq[ScalarMatch], portsMatch: PortsMatch) {
+  case class ResourceMatch(scalarMatches: Seq[ScalarMatch], gpuSetMatch: GpuSetMatch, portsMatch: PortsMatch) {
     lazy val hostPorts: Seq[Option[Int]] = portsMatch.hostPorts
 
     def scalarMatch(name: String): Option[ScalarMatch] = scalarMatches.find(_.resourceName == name)
 
     def resources: Seq[Protos.Resource] =
       scalarMatches.flatMap(_.consumedResources)(collection.breakOut) ++
-        portsMatch.resources
+        portsMatch.resources ++ gpuSetMatch.consumedResources
 
     // TODO - this assumes that volume matches are one resource to one volume, which should be correct, but may not be.
     val localVolumes: Seq[DiskResourceMatch.ConsumedVolume] =
@@ -48,8 +48,8 @@ object ResourceMatcher extends StrictLogging {
     *
     * @param acceptedRoles contains all Mesos resource roles that are accepted
     * @param needToReserve if true, only unreserved resources will considered
-    * @param labelMatcher a matcher that checks if the given resource labels
-    *                     are compliant with the expected or not expected labels
+    * @param labelMatcher  a matcher that checks if the given resource labels
+    *                      are compliant with the expected or not expected labels
     */
   case class ResourceSelector(
       acceptedRoles: Set[String],
@@ -146,6 +146,7 @@ object ResourceMatcher extends StrictLogging {
     val groupedResources: Map[Role, Seq[Protos.Resource]] = offer.getResourcesList.groupBy(_.getName).map { case (k, v) => k -> v.to[Seq] }
 
     val scalarResourceMatch = matchScalarResource(groupedResources, selector) _
+    val gpuSetResourceMatch = matchGpuSetResource(groupedResources, selector) _
     val diskResourceMatch = matchDiskResource(groupedResources, selector) _
 
     // Local volumes only need to be matched if we are making a reservation for resident tasks --
@@ -179,16 +180,21 @@ object ResourceMatcher extends StrictLogging {
     val scalarMatchResults = (
       Seq(
         scalarResourceMatch(Resource.CPUS, runSpec.resources.cpus, ScalarMatchResult.Scope.NoneDisk),
-        scalarResourceMatch(Resource.MEM, runSpec.resources.mem, ScalarMatchResult.Scope.NoneDisk),
-        scalarResourceMatch(Resource.GPUS, runSpec.resources.gpus.toDouble, ScalarMatchResult.Scope.NoneDisk)) ++
+        scalarResourceMatch(Resource.MEM, runSpec.resources.mem, ScalarMatchResult.Scope.NoneDisk)) ++
+        //        scalarResourceMatch(Resource.GPUS, runSpec.resources.mem, ScalarMatchResult.Scope.NoneDisk)) ++
         diskMatch
     ).filter(_.requiredValue != 0)
+
+    val gpuSetMatchResult = gpuSetResourceMatch(Resource.GPUS, runSpec.resources.gpus, GpuSetMatchResult.Scope.NoneGpu)
 
     // add scalar resources to noOfferMatchReasons
     val noOfferMatchReasons = scalarMatchResults
       .filter(scalar => !scalar.matches)
       .map(scalar => NoOfferMatchReason.fromResourceType(scalar.resourceName)).toBuffer
 
+    if (!gpuSetMatchResult.matches) {
+      noOfferMatchReasons += NoOfferMatchReason.InsufficientGpuSet
+    }
     var onMatchActions: Vector[() => Unit] = Vector.empty
     def addOnMatch(action: () => Unit) = {
       onMatchActions :+= action
@@ -278,6 +284,7 @@ object ResourceMatcher extends StrictLogging {
     }
 
     val resourceMatchOpt = if (scalarMatchResults.forall(_.matches)
+      && gpuSetMatchResult.matches
       && meetsFaultDomainRequirements
       && meetsAllConstraints
       && checkAvailability
@@ -286,7 +293,7 @@ object ResourceMatcher extends StrictLogging {
       portsMatchOpt match {
         case Some(portsMatch) =>
           onMatchActions.foreach(action => action.apply())
-          Some(ResourceMatch(scalarMatchResults.collect { case m: ScalarMatch => m }, portsMatch))
+          Some(ResourceMatch(scalarMatchResults.collect { case m: ScalarMatch => m }, gpuSetMatchResult.asInstanceOf[GpuSetMatch], portsMatch))
         case None =>
           // Add ports to noOfferMatchReasons
           noOfferMatchReasons += NoOfferMatchReason.InsufficientPorts
@@ -504,6 +511,28 @@ object ResourceMatcher extends StrictLogging {
     }.toList.map(_.merge)
   }
 
+  private[this] def matchGpuSetResource(
+    groupedResources: Map[Role, Seq[Protos.Resource]], selector: ResourceSelector)(
+    name: String, requiredValue: Double,
+    scope: GpuSetMatchResult.Scope): GpuSetMatch = {
+
+    require(name == Resource.GPUS)
+
+    val resourcesForName = groupedResources.getOrElse("gpu-set", Seq.empty)
+    if (resourcesForName == Seq.empty) {
+      return GpuSetNoMatch(name, requiredValue, 0, scope = scope)
+    }
+
+    val gpuResources = resourcesForName.filter(selector(_))
+
+    consumeGpuSetResources(requiredValue, gpuResources.toList) match {
+      case Left(valueLeft) =>
+        GpuSetNoMatch(name, requiredValue, requiredValue - valueLeft, scope = scope)
+      case Right((resourcesConsumed, remaining)) =>
+        KakaoBrainGpuSetMatch(name, requiredValue, resourcesConsumed, scope = scope)
+    }
+  }
+
   private[this] def matchScalarResource(
     groupedResources: Map[Role, Seq[Protos.Resource]], selector: ResourceSelector)(
     name: String, requiredValue: Double,
@@ -528,7 +557,7 @@ object ResourceMatcher extends StrictLogging {
     *
     * - Left:  indicates failure; contains the amount failed to be matched.
     * - Right: indicates success; contains a list of consumptions and a list of resources remaining after the
-    *     allocation.
+    * allocation.
     */
   @tailrec
   private[this] def consumeResources(
@@ -559,6 +588,41 @@ object ResourceMatcher extends StrictLogging {
               consumedValue :: resourcesConsumed, matcher)
           } else {
             consumeResources(valueLeft, restResources, nextResource :: resourcesNotConsumed, resourcesConsumed, matcher)
+          }
+      }
+    }
+  }
+
+  @tailrec
+  private[this] def consumeGpuSetResources(
+    valueLeft: Double,
+    resourcesLeft: List[Protos.Resource],
+    resourcesNotConsumed: List[Protos.Resource] = Nil,
+    resourcesConsumed: List[KakaoBrainGpuSetMatch.Consumption] = Nil,
+    matcher: Protos.Resource => Boolean = { _ => true }): Either[(Double), (List[KakaoBrainGpuSetMatch.Consumption], List[Protos.Resource])] = {
+    if (valueLeft <= 0) {
+      Right((resourcesConsumed, resourcesLeft ++ resourcesNotConsumed))
+    } else {
+      resourcesLeft match {
+        case Nil =>
+          Left(valueLeft)
+        case nextResource :: restResources =>
+          if (matcher(nextResource)) {
+            val consume = Math.min(valueLeft, nextResource.getSet.getItemCount)
+            val consumeGpuSet = nextResource.getSet.getItemList.slice(0, consume.toInt).toSet
+            val consumeResource = ResourceUtil.BuildSetResource("gpu-set", consumeGpuSet)
+            val newValueLeft = valueLeft - consume
+            val descrementedResource = ResourceUtil.consumeResource(nextResource, consumeResource)
+
+            val providerId = if (nextResource.hasProviderId) Option(ResourceProviderID(nextResource.getProviderId.getValue)) else None
+            val reservation = if (nextResource.hasReservation) Option(nextResource.getReservation) else None
+
+            val consumedValue = KakaoBrainGpuSetMatch.Consumption(consumeGpuSet, nextResource.getRole, providerId, reservation)
+            consumeGpuSetResources(newValueLeft, restResources, (descrementedResource ++ resourcesNotConsumed).toList,
+              consumedValue :: resourcesConsumed, matcher)
+
+          } else {
+            consumeGpuSetResources(valueLeft, restResources, nextResource :: resourcesNotConsumed, resourcesConsumed, matcher)
           }
       }
     }

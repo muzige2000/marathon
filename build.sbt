@@ -273,6 +273,8 @@ addCommandAlias("packageLinux",
   ";packageDebianForLoader"
 )
 
+libraryDependencies += "kakaobrain.marathon" % "ui" % "1.3.1" from "file:///Users/carlos/Workspace/marathon/libs/ui-1.3.1.jar"
+
 lazy val `plugin-interface` = (project in file("plugin-interface"))
     .enablePlugins(GitBranchPrompt, BasicLintingPlugin, TestWithCoveragePlugin)
     .settings(testSettings : _*)

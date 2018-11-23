@@ -49,7 +49,7 @@ object Dependencies {
     playJson % "compile",
     jsonSchemaValidator % "compile",
     rxScala % "compile",
-    marathonUI % "compile",
+//    marathonUI % "compile",
     marathonApiConsole % "compile",
     wixAccord % "compile",
     java8Compat % "compile",
@@ -195,7 +195,7 @@ object Dependency {
   val logback = "ch.qos.logback" % "logback-classic" % V.Logback
   val logstash = "net.logstash.logback" % "logstash-logback-encoder" % V.Logstash
   val marathonApiConsole = "mesosphere.marathon" % "api-console" % V.MarathonApiConsole
-  val marathonUI = "mesosphere.marathon" % "ui" % V.MarathonUI
+//  val marathonUI = "mesosphere.marathon" % "ui" % V.MarathonUI
   val mesos = "org.apache.mesos" % "mesos" % V.Mesos
   val metricsJersey = "io.dropwizard.metrics" % "metrics-jersey2" % V.Metrics
   val metricsJetty = "io.dropwizard.metrics" % "metrics-jetty9" % V.Metrics

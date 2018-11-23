@@ -47,6 +47,15 @@ object ResourceUtil extends StrictLogging {
     }
   }
 
+  def BuildSetResource(name: String, labels: Set[String]): MesosProtos.Resource = {
+    MesosProtos.Resource
+      .newBuilder()
+      .setName(name)
+      .setType(MesosProtos.Value.Type.SET)
+      .setSet(MesosProtos.Value.Set.newBuilder().addAllItem(labels.asJava))
+      .build()
+  }
+
   /**
     * Decrements the scalar resource by amount
     *
