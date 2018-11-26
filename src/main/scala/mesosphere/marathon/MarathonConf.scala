@@ -69,6 +69,13 @@ trait MarathonConf
     noshort = true,
     default = Some(true))
 
+  lazy val marathonEnv = opt[String](
+    name = "marathon_env",
+    descr = "The env of Marathon. production or etc",
+    required = true,
+//    default = Some("production"),
+  )
+
   lazy val checkpoint = toggle(
     "checkpoint",
     descrYes = "(Default) Enable checkpointing of tasks. " +

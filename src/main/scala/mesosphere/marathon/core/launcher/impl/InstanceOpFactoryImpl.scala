@@ -115,7 +115,6 @@ class InstanceOpFactoryImpl(
             networkInfo = networkInfo
           )
         )
-
         val agentInfo = AgentInfo(offer)
         val instance = LegacyAppInstance(task, agentInfo, app.unreachableStrategy)
         val instanceOp = taskOperationFactory.launchEphemeral(taskInfo, task, instance)

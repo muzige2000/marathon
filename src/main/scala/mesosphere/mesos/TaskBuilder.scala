@@ -1,7 +1,7 @@
 package mesosphere.mesos
 
 import com.typesafe.scalalogging.StrictLogging
-import mesosphere.marathon._
+import mesosphere.marathon.{state, _}
 import mesosphere.marathon.api.serialization.ContainerSerializer
 import mesosphere.marathon.core.health.MesosHealthCheck
 import mesosphere.marathon.core.task
@@ -49,7 +49,7 @@ class TaskBuilder(
 
     volumeMatchOpt.foreach(_.persistentVolumeResources.foreach(builder.addResources))
 
-    val containerProto = computeContainerInfo(resourceMatch.hostPorts, taskId)
+    val containerProto = computeContainerInfo(resourceMatch.hostPorts, taskId, resourceMatch, offer)
     val envPrefix: Option[String] = config.envVarsPrefix.toOption
 
     executor match {
@@ -114,6 +114,16 @@ class TaskBuilder(
     builder.build -> networkInfo
   }
 
+  private def isNvidiaDocker2(offer: Offer): Boolean = {
+    val version = Value.Scalar.newBuilder().setValue(2).build()
+    offer.getAttributesList.foreach(attr =>
+      if (attr.getName == "nvidia-docker-version") {
+        return attr.getScalar == version
+      }
+    )
+    false
+  }
+
   protected def computeDiscoveryInfo(
     runSpec: AppDefinition,
     hostPorts: Seq[Option[Int]]): org.apache.mesos.Protos.DiscoveryInfo = {
@@ -129,7 +139,7 @@ class TaskBuilder(
     discoveryInfoBuilder.build
   }
 
-  protected[mesos] def computeContainerInfo(hostPorts: Seq[Option[Int]], taskId: Task.Id): Option[ContainerInfo] = {
+  protected[mesos] def computeContainerInfo(hostPorts: Seq[Option[Int]], taskId: Task.Id, resourceMatch: ResourceMatch, offer: Offer): Option[ContainerInfo] = {
     if (runSpec.container.isEmpty && !runSpec.networks.hasNonHostNetworking) {
       None
     } else {
@@ -163,9 +173,35 @@ class TaskBuilder(
       // Fill in container details if necessary
       runSpec.container.foreach { c =>
         val containerWithPortMappings = c.copyWith(portMappings = boundPortMappings(c)) match {
-          case d: Container.Docker => d.copy(parameters = d.parameters :+
-            state.Parameter("label", s"MESOS_TASK_ID=${taskId.mesosTaskId.getValue}")
-          )
+          case d: Container.Docker =>
+            var newParameters = Seq[state.Parameter]()
+
+            if (resourceMatch.gpuSetMatch.matches) {
+              if (config.marathonEnv.toOption == Option("production")) {
+                d.parameters.foreach((p) =>
+                  if (p.key != "runtime" && p.key != "device") {
+                    newParameters = newParameters :+ state.Parameter(p.key, p.value)
+                  }
+                )
+                if (isNvidiaDocker2(offer)) {
+                  newParameters = newParameters :+ state.Parameter("runtime", "nvida")
+                  val gpuSets = resourceMatch.gpuSetMatch.consumedResources.flatMap { r =>
+                    r.getSet.getItemList
+                  }
+                  newParameters = newParameters :+ state.Parameter("NVIDIA_VISIBLE_DEVICES", gpuSets.mkString(","))
+                } else {
+                  resourceMatch.gpuSetMatch.consumedResources.foreach { r =>
+                    r.getSet.getItemList.foreach(i =>
+                      newParameters = newParameters :+ state.Parameter("device", "/dev/nvidia" + i)
+                    )
+                  }
+                }
+              }
+            } else {
+              newParameters = d.parameters
+            }
+            newParameters = newParameters :+ state.Parameter("label", s"MESOS_TASK_ID=${taskId.mesosTaskId.getValue}")
+            d.copy(parameters = newParameters)
           case a: Container.MesosAppC => a.copy(labels = a.labels + ("MESOS_TASK_ID" -> taskId.mesosTaskId.getValue))
           case c => c
         }
